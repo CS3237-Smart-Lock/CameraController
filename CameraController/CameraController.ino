@@ -30,7 +30,7 @@
 #define PCLK_GPIO_NUM     22
 
 
-char * url = "ws://192.168.197.75:12345/";
+char * url = "ws://192.168.205.75:12345/";
 
 camera_fb_t * fb = NULL;
 size_t _jpg_buf_len = 0;
@@ -72,11 +72,11 @@ esp_err_t init_camera() {
   //init with high specs to pre-allocate larger buffers
   if (psramFound()) {
     config.frame_size = FRAMESIZE_XGA;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = 20;
     config.fb_count = 2;
   } else {
     config.frame_size = FRAMESIZE_SVGA;
-    config.jpeg_quality = 12;
+    config.jpeg_quality = 20;
     config.fb_count = 1;
   }
   // Camera init
@@ -87,6 +87,7 @@ esp_err_t init_camera() {
   }
   sensor_t * s = esp_camera_sensor_get();
   s->set_framesize(s, FRAMESIZE_VGA);
+  s->set_brightness(s, 2);
   Serial.println("Cam Success init");
   return ESP_OK;
 };
