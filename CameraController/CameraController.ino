@@ -1,50 +1,51 @@
-#include "esp_camera.h"
-#include <WiFi.h>
-#include <ArduinoWebsockets.h>
-#include "esp_timer.h"
-#include "img_converters.h"
-#include "fb_gfx.h"
-#include "soc/soc.h" //disable brownout problems
-#include "soc/rtc_cntl_reg.h"  //disable brownout problems
 #include "driver/gpio.h"
+#include "esp_camera.h"
+#include "esp_timer.h"
+#include "fb_gfx.h"
+#include "img_converters.h"
+#include "soc/rtc_cntl_reg.h" //disable brownout problems
+#include "soc/soc.h"          //disable brownout problems
 #include <ArduinoJson.h>
+#include <ArduinoWebsockets.h>
+#include <WiFi.h>
 #include <base64.h>
 
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
+#define PWDN_GPIO_NUM 32
+#define RESET_GPIO_NUM -1
+#define XCLK_GPIO_NUM 0
+#define SIOD_GPIO_NUM 26
+#define SIOC_GPIO_NUM 27
 
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
+#define Y9_GPIO_NUM 35
+#define Y8_GPIO_NUM 34
+#define Y7_GPIO_NUM 39
+#define Y6_GPIO_NUM 36
+#define Y5_GPIO_NUM 21
+#define Y4_GPIO_NUM 19
+#define Y3_GPIO_NUM 18
+#define Y2_GPIO_NUM 5
+#define VSYNC_GPIO_NUM 25
+#define HREF_GPIO_NUM 23
+#define PCLK_GPIO_NUM 22
 
-#define BUTTON_PIN        14  // Button pin
-#define STREAM_DURATION   10000  // Stream duration in milliseconds (10 seconds)
+#define BUTTON_PIN 14         // Button pin
+#define STREAM_DURATION 10000 // Stream duration in milliseconds (10 seconds)
 
 #define WEBSOCKET_URL "ws://192.168.166.75:12345/"
 
-camera_fb_t * fb = NULL;
+camera_fb_t *fb = NULL;
 size_t _jpg_buf_len = 0;
-uint8_t * _jpg_buf = NULL;
+uint8_t *_jpg_buf = NULL;
 uint8_t state = 0;
 
 using namespace websockets;
 WebsocketsClient client;
 
-unsigned long streamStartTime = 0;  // To track when streaming started
+unsigned long streamStartTime = 0; // To track when streaming started
 bool isStreaming = false;          // Streaming state
 
-///////////////////////////////////INITIALIZE FUNCTIONS///////////////////////////////////
+///////////////////////////////////INITIALIZE
+///FUNCTIONS///////////////////////////////////
 esp_err_t init_camera() {
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
@@ -67,7 +68,7 @@ esp_err_t init_camera() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  //init with high specs to pre-allocate larger buffers
+  // init with high specs to pre-allocate larger buffers
   if (psramFound()) {
     config.frame_size = FRAMESIZE_XGA;
     config.jpeg_quality = 20;
@@ -83,7 +84,7 @@ esp_err_t init_camera() {
     Serial.printf("Camera init failed with error 0x%x", err);
     return err;
   }
-  sensor_t * s = esp_camera_sensor_get();
+  sensor_t *s = esp_camera_sensor_get();
   s->set_framesize(s, FRAMESIZE_VGA);
   s->set_brightness(s, 2);
   Serial.println("Cam Success init");
@@ -111,11 +112,11 @@ esp_err_t init_wifi(int maxRetries = 20) {
   return ESP_OK;
 }
 
-esp_err_t connect_to_websocket(){
+esp_err_t connect_to_websocket() {
   Serial.println("Connecting to websocket");
 
   bool connected = client.connect(WEBSOCKET_URL);
-  
+
   while (!connected) {
     delay(500);
     Serial.print(".");
@@ -128,39 +129,39 @@ esp_err_t connect_to_websocket(){
 
 ///////////////////////////////////SETUP///////////////////////////////////
 void setup() {
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // disable brownout detector
 
   Serial.begin(115200);
 
   init_camera();
 
-  if (init_wifi() == ESP_FAIL){
+  if (init_wifi() == ESP_FAIL) {
     ESP.restart();
   };
 
   connect_to_websocket();
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);  // Configure button pin
+  pinMode(BUTTON_PIN, INPUT_PULLUP); // Configure button pin
 }
 
-///////////////////////////////////MAIN LOOP///////////////////////////////////
+///////////////////////////////////MAIN LOOP////////////////////////////////
 void loop() {
   // Keep alive websocket
-  if (!client.available()){
+  if (!client.available()) {
     connect_to_websocket();
-  } else{
+  } else {
     client.poll();
   }
 
   bool buttonIsPressed = digitalRead(BUTTON_PIN) == LOW;
 
   if (buttonIsPressed && !isStreaming) {
-    delay(50); // Debounce delay
+    delay(50);                            // Debounce delay
     if (digitalRead(BUTTON_PIN) == LOW) { // Confirm button press
       isStreaming = true;
       streamStartTime = millis();
 
-      String startCommandBase64 = base64::encode((uint8_t*)"start", 5);
+      String startCommandBase64 = base64::encode((uint8_t *)"start", 5);
       DynamicJsonDocument startDoc(256);
       startDoc["type"] = "command";
       startDoc["data"] = startCommandBase64;
@@ -178,8 +179,8 @@ void loop() {
         ESP.restart();
       }
 
-      String base64ImageBytes = base64::encode((uint8_t*)fb->buf, fb->len);
-      const char* base64ImageUTF8 = base64ImageBytes.c_str();
+      String base64ImageBytes = base64::encode((uint8_t *)fb->buf, fb->len);
+      const char *base64ImageUTF8 = base64ImageBytes.c_str();
 
       DynamicJsonDocument doc(4096);
       doc["type"] = "image";
@@ -195,7 +196,7 @@ void loop() {
       isStreaming = false;
 
       // Send "end" command
-      String endCommandBase64 = base64::encode((uint8_t*)"end", 3);
+      String endCommandBase64 = base64::encode((uint8_t *)"end", 3);
       DynamicJsonDocument endDoc(256);
       endDoc["type"] = "command";
       endDoc["data"] = endCommandBase64;
