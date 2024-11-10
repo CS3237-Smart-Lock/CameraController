@@ -10,7 +10,6 @@
 #include <ArduinoJson.h>
 #include <base64.h>
 
-
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM      0
@@ -29,8 +28,10 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+#define BUTTON_PIN        14  // Button pin
+#define STREAM_DURATION   10000  // Stream duration in milliseconds (10 seconds)
 
-char * url = "ws://192.168.205.75:12345/";
+#define WEBSOCKET_URL "ws://192.168.166.75:12345/"
 
 camera_fb_t * fb = NULL;
 size_t _jpg_buf_len = 0;
@@ -40,11 +41,8 @@ uint8_t state = 0;
 using namespace websockets;
 WebsocketsClient client;
 
-///////////////////////////////////CALLBACK FUNCTIONS///////////////////////////////////
-void onMessageCallback(WebsocketsMessage message) {
-  Serial.print("Got Message: ");
-  Serial.println(message.data());
-}
+unsigned long streamStartTime = 0;  // To track when streaming started
+bool isStreaming = false;          // Streaming state
 
 ///////////////////////////////////INITIALIZE FUNCTIONS///////////////////////////////////
 esp_err_t init_camera() {
@@ -92,75 +90,118 @@ esp_err_t init_camera() {
   return ESP_OK;
 };
 
-
-esp_err_t init_wifi() {
+esp_err_t init_wifi(int maxRetries = 20) {
   WiFi.begin("sam_zhang", "aaabbb1234");
   Serial.println("Starting Wifi");
+
+  int retryCount = 0;
+
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    retryCount++;
+
+    if (retryCount >= maxRetries) {
+      Serial.println("\nWiFi connection failed. Restarting ESP...");
+      return ESP_FAIL;
+    }
   }
-  Serial.println("");
-  Serial.println("WiFi connected");
+
+  Serial.println("\nWiFi connected");
+  return ESP_OK;
+}
+
+esp_err_t connect_to_websocket(){
   Serial.println("Connecting to websocket");
-  client.onMessage(onMessageCallback);
-  bool connected = client.connect(url);
-  if (!connected) {
-    Serial.println("Cannot connect to websocket server!");
-    state = 3;
-    return ESP_FAIL;
-  }
-  if (state == 3) {
-    return ESP_FAIL;
+
+  bool connected = client.connect(WEBSOCKET_URL);
+  
+  while (!connected) {
+    delay(500);
+    Serial.print(".");
+    connected = client.connect(WEBSOCKET_URL);
   }
 
   Serial.println("Websocket Connected!");
-  // client.send("deviceId"); // for verification
   return ESP_OK;
-};
-
+}
 
 ///////////////////////////////////SETUP///////////////////////////////////
 void setup() {
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); //disable brownout detector
-  //  disableCore0WDT();
 
   Serial.begin(115200);
-  Serial.setDebugOutput(true);
+
   init_camera();
-  init_wifi();
+
+  if (init_wifi() == ESP_FAIL){
+    ESP.restart();
+  };
+
+  connect_to_websocket();
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);  // Configure button pin
 }
 
 ///////////////////////////////////MAIN LOOP///////////////////////////////////
 void loop() {
-  if (client.available()) {
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-      Serial.println("Camera capture failed");
-      esp_camera_fb_return(fb);
-      ESP.restart();
-    }
-
-    // Encode the image buffer to base64 bytes
-    String base64ImageBytes = base64::encode((uint8_t*)fb->buf, fb->len);
-
-    // Convert the base64 bytes to a UTF-8 string
-    const char* base64ImageUTF8 = base64ImageBytes.c_str();
-
-    // Create a JSON object and populate it
-    DynamicJsonDocument doc(2048);  // Adjust size for larger images if needed
-    doc["type"] = "image";
-    doc["data"] = base64ImageUTF8;
-
-    // Convert JSON object to string
-    String jsonString;
-    serializeJson(doc, jsonString);
-
-    // Send JSON string over WebSocket
-    client.send(jsonString);
-
-    // Release the frame buffer back to the driver
-    esp_camera_fb_return(fb);
+  // Keep alive websocket
+  if (!client.available()){
+    connect_to_websocket();
+  } else{
     client.poll();
+  }
+
+  bool buttonIsPressed = digitalRead(BUTTON_PIN) == LOW;
+
+  if (buttonIsPressed && !isStreaming) {
+    delay(50); // Debounce delay
+    if (digitalRead(BUTTON_PIN) == LOW) { // Confirm button press
+      isStreaming = true;
+      streamStartTime = millis();
+
+      String startCommandBase64 = base64::encode((uint8_t*)"start", 5);
+      DynamicJsonDocument startDoc(256);
+      startDoc["type"] = "command";
+      startDoc["data"] = startCommandBase64;
+      String startCommandJson;
+      serializeJson(startDoc, startCommandJson);
+      client.send(startCommandJson);
+    }
+  }
+
+  if (isStreaming) {
+    if (millis() - streamStartTime < STREAM_DURATION) {
+      camera_fb_t *fb = esp_camera_fb_get();
+      if (!fb) {
+        Serial.println("Camera capture failed");
+        ESP.restart();
+      }
+
+      String base64ImageBytes = base64::encode((uint8_t*)fb->buf, fb->len);
+      const char* base64ImageUTF8 = base64ImageBytes.c_str();
+
+      DynamicJsonDocument doc(4096);
+      doc["type"] = "image";
+      doc["data"] = base64ImageUTF8;
+
+      String jsonString;
+      serializeJson(doc, jsonString);
+
+      client.send(jsonString);
+
+      esp_camera_fb_return(fb);
+    } else {
+      isStreaming = false;
+
+      // Send "end" command
+      String endCommandBase64 = base64::encode((uint8_t*)"end", 3);
+      DynamicJsonDocument endDoc(256);
+      endDoc["type"] = "command";
+      endDoc["data"] = endCommandBase64;
+      String endCommandJson;
+      serializeJson(endDoc, endCommandJson);
+      client.send(endCommandJson);
+    }
   }
 }
