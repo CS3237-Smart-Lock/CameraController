@@ -31,7 +31,7 @@
 #define BUTTON_PIN 14         // Button pin
 #define STREAM_DURATION 10000 // Stream duration in milliseconds (10 seconds)
 
-#define WEBSOCKET_URL "ws://192.168.166.75:12345/"
+#define WEBSOCKET_URL "ws://192.168.0.75:12345/"
 
 camera_fb_t *fb = NULL;
 size_t _jpg_buf_len = 0;
